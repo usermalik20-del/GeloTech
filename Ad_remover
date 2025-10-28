@@ -1,0 +1,760 @@
+# ------------------------------------------------------------
+# GeloTech Android Ad Remover Utility
+# ------------------------------------------------------------
+# Features:
+# - Prominent Device Info tab (first tab) with detailed info, refresh & copy
+# - Auto-detects adb.exe location or lets user select manually
+# - Lists installed apps and system services
+# - Backup selected APKs to /backups folder
+# - Restore APKs from backup folder
+# - Kill or uninstall background services
+# - Change ADB path anytime via UI
+# - Search & filter installed apps
+# - Safe threaded ADB operations (no UI freeze)
+# ------------------------------------------------------------
+# Built with: PyQt6
+# Compatible with PyInstaller .exe build
+# ------------------------------------------------------------
+
+import os
+import sys
+import subprocess
+import datetime
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
+    QPushButton, QLabel, QProgressBar, QLineEdit, QFileDialog,
+    QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView, QTextEdit
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+
+# -------------------------
+# Helper: find adb executable
+# -------------------------
+def find_adb_executable():
+    """
+    Attempt to find adb automatically:
+    1. Check adb_path.txt saved path
+    2. Check several common Windows install locations
+    3. Search PATH for adb.exe
+    Returns: path string or None
+    """
+    # 1) saved path
+    if os.path.exists("adb_path.txt"):
+        try:
+            with open("adb_path.txt", "r", encoding="utf-8") as f:
+                saved = f.read().strip()
+            if saved and os.path.exists(saved):
+                return saved
+        except Exception:
+            pass
+
+    # 2) common paths
+    candidates = [
+        r"C:\Android\platform-tools\adb.exe",
+        r"C:\Program Files (x86)\Android\android-sdk\platform-tools\adb.exe",
+        r"C:\Program Files\Android\android-sdk\platform-tools\adb.exe",
+        os.path.join(os.getcwd(), "platform-tools", "adb.exe"),
+        os.path.join(os.getcwd(), "platform-tools", "adb"),
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+
+    # 3) PATH environment search
+    for path_dir in os.getenv("PATH", "").split(os.pathsep):
+        adb_candidate = os.path.join(path_dir.strip('"'), "adb.exe")
+        if os.path.exists(adb_candidate):
+            return adb_candidate
+        # also try "adb" (unix/macos)
+        adb_candidate2 = os.path.join(path_dir.strip('"'), "adb")
+        if os.path.exists(adb_candidate2):
+            return adb_candidate2
+
+    return None
+
+
+# -------------------------
+# Threaded worker: uninstall (non-blocking)
+# -------------------------
+class RemoveWorker(QThread):
+    """Thread to run adb uninstall so UI doesn't freeze."""
+    finished = pyqtSignal(str, bool)
+
+    def __init__(self, adb_path, package_name):
+        super().__init__()
+        self.adb_path = adb_path
+        self.package_name = package_name
+
+    def run(self):
+        try:
+            proc = subprocess.run(
+                [self.adb_path, "shell", "pm", "uninstall", "--user", "0", self.package_name],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            out = (proc.stdout or "") + (proc.stderr or "")
+            if "Success" in out:
+                self.finished.emit(self.package_name, True)
+            else:
+                self.finished.emit(out.strip() or "Unknown uninstall result", False)
+        except Exception as e:
+            self.finished.emit(str(e), False)
+
+
+# -------------------------
+# Main GUI Application
+# -------------------------
+class GeloTechAdRemoverApp(QWidget):
+    """
+    Main application window for GeloTech Android Ad Remover Utility.
+    Contains tabs: Device Info (prominent), Installed Apps, Running Services, Logs.
+    """
+
+    def __init__(self, adb_path):
+        super().__init__()
+        self.setWindowTitle("GeloTech Android Ad Remover Utility")
+        self.setGeometry(100, 100, 1100, 720)
+
+        # store adb executable path used for all adb subprocess calls
+        self.adb_path = adb_path
+
+        # device info store
+        self.device_info = {}
+
+        # build UI
+        self.init_ui()
+
+        # initial device check / populate device info
+        # calling here ensures UI exists to show results
+        self.check_device_and_update_info()
+
+    # -------------------------
+    # UI construction
+    # -------------------------
+    def init_ui(self):
+        layout = QVBoxLayout()
+        self.tabs = QTabWidget()
+
+        # Device Info tab (prominent — first tab)
+        self.tab_device = QWidget()
+        self._build_device_tab()
+        self.tabs.addTab(self.tab_device, "📟 Device Info")
+
+        # Installed Apps tab
+        self.tab_apps = QWidget()
+        self._build_apps_tab()
+        self.tabs.addTab(self.tab_apps, "📱 Installed Apps")
+
+        # Running Services tab
+        self.tab_services = QWidget()
+        self._build_services_tab()
+        self.tabs.addTab(self.tab_services, "⚙️ Running Services")
+
+        # Logs tab
+        self.tab_logs = QWidget()
+        self._build_logs_tab()
+        self.tabs.addTab(self.tab_logs, "🪵 Logs")
+
+        # Bottom row: status, progress, ADB buttons
+        bottom = QHBoxLayout()
+        self.status_label = QLabel("Status: Ready")
+        self.progress_bar = QProgressBar()
+        btn_change_adb = QPushButton("Change ADB Path")
+        btn_reconnect = QPushButton("Reconnect ADB")
+
+        btn_change_adb.clicked.connect(self.change_adb_path)
+        btn_reconnect.clicked.connect(self.reconnect_adb)
+
+        bottom.addWidget(self.status_label, 2)
+        bottom.addWidget(self.progress_bar, 3)
+        bottom.addWidget(btn_change_adb, 1)
+        bottom.addWidget(btn_reconnect, 1)
+
+        layout.addWidget(self.tabs)
+        layout.addLayout(bottom)
+        self.setLayout(layout)
+
+    # -------------------------
+    # Device Info tab builder
+    # -------------------------
+    def _build_device_tab(self):
+        """
+        Builds the Device Info tab UI:
+        - Readable labels for Brand, Model, OS, Serial, Battery, Storage, Uptime
+        - Refresh Device Info button
+        - Copy-to-Clipboard button (copies readable summary)
+        """
+        layout = QVBoxLayout()
+
+        # Top actions
+        actions = QHBoxLayout()
+        btn_refresh_dev = QPushButton("Refresh Device Info")
+        btn_copy_info = QPushButton("Copy Info")
+        btn_refresh_dev.clicked.connect(self.check_device_and_update_info)
+        btn_copy_info.clicked.connect(self.copy_device_info_to_clipboard)
+        actions.addWidget(btn_refresh_dev)
+        actions.addWidget(btn_copy_info)
+        actions.addStretch()
+        layout.addLayout(actions)
+
+        # Info display (labels)
+        self.lbl_brand = QLabel("Brand: -")
+        self.lbl_model = QLabel("Model: -")
+        self.lbl_os = QLabel("Android OS: -")
+        self.lbl_build = QLabel("Build ID: -")
+        self.lbl_serial = QLabel("Serial: -")
+        self.lbl_battery = QLabel("Battery: -")
+        self.lbl_storage = QLabel("Storage: -")
+        self.lbl_uptime = QLabel("Uptime: -")
+
+        # style for prominence
+        for lbl in (self.lbl_brand, self.lbl_model, self.lbl_os, self.lbl_build,
+                    self.lbl_serial, self.lbl_battery, self.lbl_storage, self.lbl_uptime):
+            lbl.setStyleSheet("font-size:13px; padding:4px;")
+
+        layout.addWidget(self.lbl_brand)
+        layout.addWidget(self.lbl_model)
+        layout.addWidget(self.lbl_os)
+        layout.addWidget(self.lbl_build)
+        layout.addWidget(self.lbl_serial)
+        layout.addWidget(self.lbl_battery)
+        layout.addWidget(self.lbl_storage)
+        layout.addWidget(self.lbl_uptime)
+
+        self.tab_device.setLayout(layout)
+
+    # -------------------------
+    # Installed Apps tab builder
+    # -------------------------
+    def _build_apps_tab(self):
+        layout = QVBoxLayout()
+        search_bar = QLineEdit()
+        search_bar.setPlaceholderText("Search installed apps...")
+        search_bar.textChanged.connect(self.filter_apps)
+
+        self.apps_table = QTableWidget(0, 1)
+        self.apps_table.setHorizontalHeaderLabels(["Package Name"])
+        self.apps_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        # action buttons
+        btn_layout = QHBoxLayout()
+        btn_refresh = QPushButton("Refresh List")
+        btn_backup = QPushButton("Backup Selected")
+        btn_restore = QPushButton("Install from Backups")
+        btn_uninstall = QPushButton("Uninstall Selected")
+
+        btn_refresh.clicked.connect(self.refresh_apps)
+        btn_backup.clicked.connect(self.backup_selected)
+        btn_restore.clicked.connect(self.restore_backup)
+        btn_uninstall.clicked.connect(self.remove_selected)
+
+        btn_layout.addWidget(btn_refresh)
+        btn_layout.addWidget(btn_backup)
+        btn_layout.addWidget(btn_restore)
+        btn_layout.addWidget(btn_uninstall)
+        btn_layout.addStretch()
+
+        layout.addWidget(search_bar)
+        layout.addWidget(self.apps_table)
+        layout.addLayout(btn_layout)
+        self.tab_apps.setLayout(layout)
+
+    # -------------------------
+    # Running Services tab builder
+    # -------------------------
+    def _build_services_tab(self):
+        layout = QVBoxLayout()
+
+        self.services_table = QTableWidget(0, 1)
+        self.services_table.setHorizontalHeaderLabels(["Service / Process"])
+        self.services_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        btn_layout = QHBoxLayout()
+        btn_refresh = QPushButton("Refresh Services")
+        btn_kill = QPushButton("Kill Selected Service")
+        btn_backup_uninstall = QPushButton("Backup + Uninstall")
+
+        btn_refresh.clicked.connect(self.refresh_services)
+        btn_kill.clicked.connect(self.kill_selected_service)
+        btn_backup_uninstall.clicked.connect(self.uninstall_service_with_backup)
+
+        btn_layout.addWidget(btn_refresh)
+        btn_layout.addWidget(btn_kill)
+        btn_layout.addWidget(btn_backup_uninstall)
+        btn_layout.addStretch()
+
+        layout.addWidget(self.services_table)
+        layout.addLayout(btn_layout)
+        self.tab_services.setLayout(layout)
+
+    # -------------------------
+    # Logs tab builder
+    # -------------------------
+    def _build_logs_tab(self):
+        layout = QVBoxLayout()
+        self.log_console = QTextEdit()
+        self.log_console.setReadOnly(True)
+        layout.addWidget(self.log_console)
+        self.tab_logs.setLayout(layout)
+
+    # -------------------------
+    # Logging helper
+    # -------------------------
+    def log(self, message):
+        """
+        Append timestamped message to the logs console and print to stdout.
+        """
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        msg = f"[{ts}] {message}"
+        self.log_console.append(msg)
+        print(msg)
+
+    # -------------------------
+    # Device detection & info
+    # -------------------------
+    def check_device_and_update_info(self):
+        """
+        Check for connected device(s) using `adb devices`. If found, query device properties,
+        battery status, storage, and uptime. Update the Device Info tab labels.
+        """
+        self.status_label.setText("Status: Checking device...")
+        self.log("Checking for connected device(s)...")
+
+        # attempt to run `adb devices`
+        try:
+            proc = subprocess.run([self.adb_path, "devices"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8)
+            out = proc.stdout or proc.stderr or ""
+            lines = [l.strip() for l in out.splitlines() if l.strip()]
+            # first line usually "List of devices attached"
+            devices = []
+            for line in lines[1:]:
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == "device":
+                    devices.append(parts[0])
+            if not devices:
+                self._set_device_labels_disconnected()
+                self.log("No device connected.")
+                self.status_label.setText("Status: No device connected.")
+                return
+            # use first device serial for queries
+            serial = devices[0]
+            self.device_info['serial'] = serial
+            self.log(f"Device detected: {serial}")
+            # collect properties
+            props = {
+                "brand": "ro.product.brand",
+                "model": "ro.product.model",
+                "os": "ro.build.version.release",
+                "build": "ro.build.display.id",
+                "serial_prop": "ro.serialno"
+            }
+            for key, prop in props.items():
+                try:
+                    p = subprocess.run([self.adb_path, "shell", "getprop", prop], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=4)
+                    val = (p.stdout or "").strip() or "Unknown"
+                except Exception:
+                    val = "Unknown"
+                self.device_info[key] = val
+
+            # battery level via `dumpsys battery`
+            try:
+                b = subprocess.run([self.adb_path, "shell", "dumpsys", "battery"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=4)
+                b_out = b.stdout or ""
+                batt_percent = "Unknown"
+                for line in b_out.splitlines():
+                    if "level:" in line:
+                        try:
+                            batt_percent = line.split("level:")[-1].strip()
+                        except Exception:
+                            pass
+                if batt_percent == "Unknown" and "AC powered" in b_out:
+                    batt_percent = "Present (unknown %)"
+                self.device_info['battery'] = batt_percent
+            except Exception as e:
+                self.device_info['battery'] = "Unknown"
+                self.log(f"Battery query failed: {e}")
+
+            # storage usage: use `df -h /data` (best-effort; permission may vary)
+            try:
+                d = subprocess.run([self.adb_path, "shell", "df", "-h", "/data"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+                df_out = d.stdout or ""
+                storage_summary = "Unknown"
+                # look for a line that contains '/data' or 'Filesystem'
+                for line in df_out.splitlines():
+                    if "/data" in line or "data" in line.lower():
+                        storage_summary = line.strip()
+                        break
+                # fallback: take last non-empty line
+                if storage_summary == "Unknown":
+                    lines_df = [l.strip() for l in df_out.splitlines() if l.strip()]
+                    if lines_df:
+                        storage_summary = lines_df[-1]
+                self.device_info['storage'] = storage_summary
+            except Exception as e:
+                self.device_info['storage'] = "Unknown"
+                self.log(f"Storage query failed: {e}")
+
+            # uptime: use `cat /proc/uptime` and convert seconds to readable
+            try:
+                u = subprocess.run([self.adb_path, "shell", "cat", "/proc/uptime"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=4)
+                u_out = (u.stdout or "").strip()
+                if u_out:
+                    seconds = float(u_out.split()[0])
+                    hours = int(seconds // 3600)
+                    minutes = int((seconds % 3600) // 60)
+                    self.device_info['uptime'] = f"{hours}h {minutes}m"
+                else:
+                    self.device_info['uptime'] = "Unknown"
+            except Exception:
+                self.device_info['uptime'] = "Unknown"
+
+            # fill labels
+            self._update_device_labels()
+            self.status_label.setText("Status: Device info updated.")
+            self.log("Device info refreshed.")
+        except Exception as e:
+            self._set_device_labels_disconnected()
+            self.log(f"Error during device check: {e}")
+            self.status_label.setText("Status: Error checking device.")
+
+    def _update_device_labels(self):
+        """Internal helper to update device info labels from self.device_info dict."""
+        self.lbl_brand.setText(f"Brand: {self.device_info.get('brand', 'Unknown')}")
+        self.lbl_model.setText(f"Model: {self.device_info.get('model', 'Unknown')}")
+        self.lbl_os.setText(f"Android OS: {self.device_info.get('os', 'Unknown')}")
+        self.lbl_build.setText(f"Build ID: {self.device_info.get('build', 'Unknown')}")
+        self.lbl_serial.setText(f"Serial: {self.device_info.get('serial', self.device_info.get('serial_prop', 'Unknown'))}")
+        batt = self.device_info.get('battery', 'Unknown')
+        self.lbl_battery.setText(f"Battery: {batt}% " if batt and batt != "Unknown" else f"Battery: {batt}")
+        self.lbl_storage.setText(f"Storage: {self.device_info.get('storage', 'Unknown')}")
+        self.lbl_uptime.setText(f"Uptime: {self.device_info.get('uptime', 'Unknown')}")
+
+    def _set_device_labels_disconnected(self):
+        """Set device info labels to disconnected state."""
+        self.lbl_brand.setText("Brand: -")
+        self.lbl_model.setText("Model: -")
+        self.lbl_os.setText("Android OS: -")
+        self.lbl_build.setText("Build ID: -")
+        self.lbl_serial.setText("Serial: -")
+        self.lbl_battery.setText("Battery: -")
+        self.lbl_storage.setText("Storage: -")
+        self.lbl_uptime.setText("Uptime: -")
+
+    def copy_device_info_to_clipboard(self):
+        """
+        Copies a nicely formatted device info summary to the system clipboard.
+        """
+        info_lines = [
+            f"Brand: {self.device_info.get('brand', 'Unknown')}",
+            f"Model: {self.device_info.get('model', 'Unknown')}",
+            f"Android OS: {self.device_info.get('os', 'Unknown')}",
+            f"Build ID: {self.device_info.get('build', 'Unknown')}",
+            f"Serial: {self.device_info.get('serial', self.device_info.get('serial_prop', 'Unknown'))}",
+            f"Battery: {self.device_info.get('battery', 'Unknown')}",
+            f"Storage: {self.device_info.get('storage', 'Unknown')}",
+            f"Uptime: {self.device_info.get('uptime', 'Unknown')}",
+        ]
+        text = "\n".join(info_lines)
+        # using QApplication clipboard
+        try:
+            QApplication.clipboard().setText(text)
+            QMessageBox.information(self, "Copied", "Device info copied to clipboard.")
+            self.log("Device info copied to clipboard.")
+        except Exception as e:
+            self.log(f"Failed to copy to clipboard: {e}")
+            QMessageBox.warning(self, "Copy Failed", f"Could not copy device info: {e}")
+
+    # -------------------------
+    # Apps tab actions
+    # -------------------------
+    def refresh_apps(self):
+        """
+        Populate the Installed Apps list using `adb shell pm list packages`.
+        Non-blocking in current implementation but may take a while on slow devices.
+        """
+        self.status_label.setText("Status: Fetching installed apps...")
+        self.apps_table.setRowCount(0)
+        try:
+            proc = subprocess.run([self.adb_path, "shell", "pm", "list", "packages"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8)
+            out = proc.stdout or proc.stderr or ""
+            lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+            for ln in lines:
+                name = ln.replace("package:", "")
+                row = self.apps_table.rowCount()
+                self.apps_table.insertRow(row)
+                self.apps_table.setItem(row, 0, QTableWidgetItem(name))
+            self.status_label.setText(f"Status: {len(lines)} apps found.")
+            self.log(f"Fetched {len(lines)} installed apps.")
+            # also refresh device info since device is responding
+            self.check_device_and_update_info()
+        except Exception as e:
+            self.log(f"Error fetching apps: {e}")
+            self.status_label.setText("Status: Error fetching apps.")
+
+    def backup_selected(self):
+        """Backup currently selected app's APK to /backups (calls backup_selected_app)."""
+        selected = self.apps_table.currentItem()
+        if not selected:
+            QMessageBox.information(self, "No Selection", "Please select an app to backup.")
+            return
+        self.backup_selected_app(selected.text())
+
+    def backup_selected_app(self, package_name):
+        """
+        Extracts APK path (`pm path`) and pulls the file to ./backups/<package>.apk.
+        This is best-effort; some paths may be inaccessible.
+        """
+        try:
+            proc = subprocess.run([self.adb_path, "shell", "pm", "path", package_name],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            out = proc.stdout or proc.stderr or ""
+            apk_path = out.strip().replace("package:", "")
+            if not apk_path:
+                self.log(f"Could not determine APK path for {package_name}")
+                QMessageBox.information(self, "Backup Failed", f"Could not determine APK path for {package_name}")
+                return
+            os.makedirs("backups", exist_ok=True)
+            dest = os.path.join("backups", f"{package_name}.apk")
+            p = subprocess.run([self.adb_path, "pull", apk_path, dest],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+            pulled_out = (p.stdout or "") + (p.stderr or "")
+            if os.path.exists(dest) or "1 file pulled" in pulled_out:
+                self.log(f"APK backed up: {dest}")
+                QMessageBox.information(self, "Backup Complete", f"APK backed up: {dest}")
+            else:
+                self.log(f"APK pull output: {pulled_out}")
+                QMessageBox.warning(self, "Backup Incomplete", f"APK pull reported: {pulled_out}")
+        except Exception as e:
+            self.log(f"Backup error for {package_name}: {e}")
+            QMessageBox.warning(self, "Backup Error", f"Error backing up {package_name}: {e}")
+
+    def restore_backup(self):
+        """
+        Let user pick APK files from ./backups and install them using `adb install -r`.
+        """
+        try:
+            backup_dir = os.path.join(os.getcwd(), "backups")
+            if not os.path.exists(backup_dir):
+                QMessageBox.warning(self, "No Backups Found", "The backups folder is empty or missing.")
+                return
+            files, _ = QFileDialog.getOpenFileNames(self, "Select APKs to Restore", backup_dir, "APK Files (*.apk)")
+            if not files:
+                return
+            total = len(files)
+            self.progress_bar.setValue(0)
+            self.status_label.setText(f"Status: Restoring {total} apps...")
+            for i, apk in enumerate(files, start=1):
+                pkg_name = os.path.basename(apk).replace(".apk", "")
+                self.log(f"Installing {pkg_name} ...")
+                p = subprocess.run([self.adb_path, "install", "-r", apk],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+                out = (p.stdout or "") + (p.stderr or "")
+                if "Success" in out:
+                    self.log(f"Installed {pkg_name}")
+                else:
+                    self.log(f"Install failed for {pkg_name}: {out.strip()[:200]}")
+                self.progress_bar.setValue(int((i / total) * 100))
+            self.status_label.setText("Status: Restore complete.")
+            self.progress_bar.setValue(100)
+        except Exception as e:
+            self.log(f"Restore error: {e}")
+            self.status_label.setText("Status: Restore failed.")
+
+    def remove_selected(self, package_name=None):
+        """
+        Uninstall selected app (or package_name passed). Runs in background thread.
+        """
+        if not package_name:
+            selected = self.apps_table.currentItem()
+            if not selected:
+                QMessageBox.information(self, "No Selection", "Select an app to uninstall.")
+                return
+            package_name = selected.text()
+        confirm = QMessageBox.question(self, "Confirm Uninstall", f"Uninstall {package_name}?",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        self.status_label.setText(f"Status: Uninstalling {package_name}...")
+        worker = RemoveWorker(self.adb_path, package_name)
+        worker.finished.connect(self.on_uninstall_finished)
+        worker.start()
+
+    def on_uninstall_finished(self, info, success):
+        """
+        Callback when RemoveWorker emits finished. `info` is package name or error text.
+        """
+        if success:
+            self.log(f"Uninstalled: {info}")
+            QMessageBox.information(self, "Uninstall Complete", f"{info} uninstalled.")
+            # refresh app list after uninstall
+            self.refresh_apps()
+        else:
+            self.log(f"Uninstall failed: {info}")
+            QMessageBox.warning(self, "Uninstall Failed", f"Failed: {info}")
+        self.progress_bar.setValue(100)
+        self.status_label.setText("Status: Ready")
+
+    # -------------------------
+    # Services tab actions
+    # -------------------------
+    def refresh_services(self):
+        """
+        Populate running services table using `adb shell dumpsys activity services`.
+        This is a heuristic parse and will attempt to show package-like names.
+        """
+        self.status_label.setText("Status: Fetching running services...")
+        self.services_table.setRowCount(0)
+        try:
+            p = subprocess.run([self.adb_path, "shell", "dumpsys", "activity", "services"],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+            out = p.stdout or p.stderr or ""
+            lines = [l.strip() for l in out.splitlines() if l.strip()]
+            # heuristic: lines that mention ServiceRecord often contain package/class
+            for line in lines:
+                if "ServiceRecord" in line or "service=" in line:
+                    # attempt to extract a last token that resembles a package
+                    token = line.split()[-1]
+                    row = self.services_table.rowCount()
+                    self.services_table.insertRow(row)
+                    self.services_table.setItem(row, 0, QTableWidgetItem(token))
+            self.status_label.setText("Status: Services refreshed.")
+            self.log("Services list updated.")
+            # update device info because device responded
+            self.check_device_and_update_info()
+        except Exception as e:
+            self.log(f"Error fetching services: {e}")
+            self.status_label.setText("Status: Error fetching services.")
+
+    def kill_selected_service(self):
+        """
+        Force-stop the currently selected package/process via `adb shell am force-stop <pkg>`.
+        """
+        selected = self.services_table.currentItem()
+        if not selected:
+            QMessageBox.information(self, "No Selection", "Select a service to stop.")
+            return
+        pkg = selected.text().strip()
+        confirm = QMessageBox.question(self, "Confirm Stop", f"Force-stop {pkg}?",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            subprocess.run([self.adb_path, "shell", "am", "force-stop", pkg],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            self.log(f"Force-stopped {pkg}")
+            QMessageBox.information(self, "Stopped", f"{pkg} force-stopped.")
+            self.refresh_services()
+        except Exception as e:
+            self.log(f"Failed to stop {pkg}: {e}")
+            QMessageBox.warning(self, "Stop Failed", f"Error: {e}")
+
+    def uninstall_service_with_backup(self):
+        """
+        For selected service/package: attempt to backup APK and data (best-effort), then uninstall.
+        Uses the same backup logic as apps backup and RemoveWorker to uninstall.
+        """
+        selected = self.services_table.currentItem()
+        if not selected:
+            QMessageBox.information(self, "No Selection", "Select a service first.")
+            return
+        package_name = selected.text().strip()
+        confirm = QMessageBox.question(self, "Confirm Backup+Uninstall",
+                                       f"Backup APK (if possible) and uninstall {package_name}?",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        # 1) backup apk
+        self.backup_selected_app(package_name)
+        # 2) uninstall
+        self.remove_selected(package_name)
+
+    # -------------------------
+    # Search/filter helper
+    # -------------------------
+    def filter_apps(self, text):
+        """
+        Filter the apps table rows by search text.
+        """
+        for r in range(self.apps_table.rowCount()):
+            item = self.apps_table.item(r, 0)
+            if item:
+                self.apps_table.setRowHidden(r, text.lower() not in item.text().lower())
+
+    # -------------------------
+    # ADB path & reconnection helpers
+    # -------------------------
+    def change_adb_path(self):
+        """
+        Let user pick a different adb executable, save to adb_path.txt and update in memory.
+        """
+        new_path, _ = QFileDialog.getOpenFileName(self, "Select adb executable", "", "ADB executable (adb.exe);;All Files (*)")
+        if not new_path:
+            return
+        try:
+            with open("adb_path.txt", "w", encoding="utf-8") as f:
+                f.write(new_path)
+            self.adb_path = new_path
+            self.log(f"ADB path changed to: {new_path}")
+            QMessageBox.information(self, "ADB Path Updated", f"ADB path set to:\n{new_path}")
+            # auto-refresh device info and lists using new adb
+            self.reconnect_adb()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to update ADB path: {e}")
+
+    def reconnect_adb(self):
+        """
+        Restart ADB server to re-establish device connectivity and refresh UI info.
+        """
+        self.status_label.setText("Status: Restarting ADB server...")
+        try:
+            subprocess.run([self.adb_path, "kill-server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            subprocess.run([self.adb_path, "start-server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            subprocess.run([self.adb_path, "devices"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            self.log("ADB server restarted.")
+            self.status_label.setText("Status: ADB restarted.")
+            # refresh device info and lists
+            self.check_device_and_update_info()
+            self.refresh_apps()
+            self.refresh_services()
+        except Exception as e:
+            self.log(f"Error restarting ADB: {e}")
+            self.status_label.setText("Status: Failed to restart ADB.")
+
+# -------------------------
+# Application entry point
+# -------------------------
+def main():
+    # Locate adb first (try automatic detection)
+    adb_path = find_adb_executable()
+
+    app = QApplication(sys.argv)
+
+    # If not found, prompt user to select adb via file dialog (Qt dialog)
+    if not adb_path:
+        QMessageBox.warning(None, "ADB Not Found", "Could not locate adb automatically. Please select adb executable.")
+        adb_path, _ = QFileDialog.getOpenFileName(None, "Select adb executable", "", "ADB executable (adb.exe);;All Files (*)")
+        if not adb_path:
+            # user cancelled — exit gracefully
+            sys.exit(0)
+        # save chosen path for next runs
+        try:
+            with open("adb_path.txt", "w", encoding="utf-8") as f:
+                f.write(adb_path)
+        except Exception:
+            pass
+
+    # Create main window
+    window = GeloTechAdRemoverApp(adb_path)
+    window.show()
+
+    # initial checks already performed in constructor, but double-check now
+    try:
+        window.check_device_and_update_info()
+    except Exception:
+        pass
+
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
