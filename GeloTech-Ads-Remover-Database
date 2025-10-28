@@ -1,0 +1,49 @@
+com.google.android.gms.ads|Google Mobile Ads SDK|One of the most common ad SDKs used for displaying ads in Android apps.
+com.facebook.ads|Facebook Audience Network|Used for displaying various ad formats including banners, interstitials, and rewarded video ads.
+com.mopub.mobileads|MoPub|A mobile advertising platform that allows developers to monetize their apps with ads.
+com.appodeal.ads|Appodeal|A mobile ad network that supports multiple ad formats and is used by many Android apps.
+com.yandex.mobile.ads|Yandex Mobile Ads|Used primarily in Russian-speaking markets for displaying ads in Android apps.
+com.startapp.android|StartApp|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.inmobi.ads|InMobi|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.flurry.android|Flurry|A mobile analytics and advertising platform that provides ad mediation and ad serving for Android apps.
+com.chartboost.sdk|Chartboost|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.unity3d.ads|Unity Ads|Used by Unity-based games and apps to display rewarded video ads.
+com.ironsource.mobilcore|IronSource|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.applovin.impl|AppLovin|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.vungle.publisher|Vungle|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.tapjoy.TapjoySDK|Tapjoy|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.adcolony.sdk|AdColony|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.admob.android|AdMob|Google's mobile advertising platform for monetizing apps.
+com.inneractive.sdk|Inneractive|A mobile ad network that provides various ad formats for Android apps.
+com.millennial.android|Millennial Media|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.smaato.android|Smaato|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.airpush.android|AirPush|A mobile advertising platform known for push notifications and ads.
+com.leadbolt.android|LeadBolt|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.mobfox.android|MobFox|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.jumptap.android|JumpTap|A mobile advertising platform that provides location-based ads for Android apps.
+com.greystripe.android|Greystripe|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.mdotm.android|mdotM|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.medialets.android|Medialets|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.pontiflex.android|Pontiflex|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.tremor.android|Tremor Video|A mobile advertising platform that provides video ads for Android apps.
+com.videoplaza.android|Videoplaza|A mobile advertising platform that provides video ads for Android apps.
+com.adwhirl.android|AdWhirl|A mobile ad network aggregator that provides ad mediation for Android apps.
+com.openx.android|OpenX|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.pubmatic.android|PubMatic|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.rhythmone.android|RhythmOne|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.sovrn.android|Sovrn|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.criteo.android|Criteo|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.conversantmedia.android|Conversant Media|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.tremormedia.android|Tremor Media|A mobile advertising platform that provides video ads for Android apps.
+com.fyber.android|Fyber|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.supersonic.ads|Supersonic Ads|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.heyzap.android|Heyzap|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.millennialmedia.android|Millennial Media|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.inmobi.monetization|InMobi Monetization|InMobi's monetization platform for displaying ads in Android apps.
+com.amazon.device.ads|Amazon Device Ads|Amazon's mobile advertising platform for displaying ads in Android apps.
+com.ms.android.ads|Microsoft Ads|Microsoft's mobile advertising platform for displaying ads in Android apps.
+com.mintegral.msdk|Mintegral|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.bytedance.sdk|ByteDance Ads|ByteDance's mobile advertising platform used in various apps.
+com.pangle.global|Pangle|A mobile advertising platform that provides ad mediation and ad serving for Android apps.
+com.kwai.ads|Kuaishou Ads|Kuaishou's mobile advertising platform for displaying ads in Android apps.
+com
