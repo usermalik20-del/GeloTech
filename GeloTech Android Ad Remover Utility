@@ -150,7 +150,7 @@ class ScanAdsWorker(QThread):
 class GeloTechApp(QWidget):
     def __init__(self, adb_path: Optional[str]):
         super().__init__()
-        self.setWindowTitle("GeloTech Android Ad Remover")
+        self.setWindowTitle("GeloTech Android Ad Remover V1")
         if os.path.exists(ICO_FILE):
             try: self.setWindowIcon(QIcon(ICO_FILE))
             except Exception: pass
@@ -187,7 +187,7 @@ class GeloTechApp(QWidget):
         self.btn_connect = QPushButton("🔌 Connect / Refresh")
         self.btn_connect.clicked.connect(self._auto_connect_and_refresh)
         dash_layout.addWidget(self.btn_connect)
-        btn_adaway = QPushButton("⬇️ View AdAway")
+        btn_adaway = QPushButton("⬇️ Download AdAway")
         btn_adaway.clicked.connect(lambda: webbrowser.open(ADAWAY_LINK))
         dash_layout.addWidget(btn_adaway)
         dash.setLayout(dash_layout)
@@ -209,7 +209,7 @@ class GeloTechApp(QWidget):
         il = QVBoxLayout()
 
         # Detailed device info labels
-        self.lbl_conn = QLabel("Connection: ❌ No device")
+        self.lbl_conn = QLabel("Connection: ❌ No device found")
         self.lbl_serial = QLabel("Serial: -")
         self.lbl_manufacturer = QLabel("Manufacturer: -")
         self.lbl_model = QLabel("Model: -")
@@ -266,7 +266,7 @@ class GeloTechApp(QWidget):
         self.apps_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         vbox.addWidget(self.apps_table, stretch=1)
         tab.setLayout(vbox)
-        self.tabs.addTab(tab, "📱 Device & Apps")
+        self.tabs.addTab(tab, "📱 Connected Device")
 
     def _build_detector_tab(self):
         tab = QWidget()
@@ -296,7 +296,7 @@ class GeloTechApp(QWidget):
         btn_export.clicked.connect(self._export_flagged_report)
 
         for b in (btn_refresh, btn_scan, btn_backup, btn_uninstall, btn_export):
-            b.setMinimumHeight(36)
+            b.setMinimumHeight(40)
             hl.addWidget(b)
         hl.addStretch()
         act_box.setLayout(hl)
@@ -373,7 +373,7 @@ class GeloTechApp(QWidget):
             self.status_label.setText("Status: Connected to ADB")
             self.refresh_apps()
         else:
-            self.status_label.setText("Status: ADB not found")
+            self.status_label.setText("Status: ADB Not Found")
             # let user choose if they want
             dlg = QMessageBox(self)
             dlg.setWindowTitle("ADB Not Found")
@@ -462,7 +462,7 @@ class GeloTechApp(QWidget):
         # Best-effort, lightweight device info collection
         try:
             if not self.adb:
-                self.lbl_conn.setText("Connection: ❌ No ADB")
+                self.lbl_conn.setText("Connection: ❌ No ADB Device Found")
                 return
 
             # check connected devices
@@ -481,7 +481,7 @@ class GeloTechApp(QWidget):
                     if parts:
                         devices.append(parts[0].strip())
             if not devices:
-                self.lbl_conn.setText("Connection: ❌ No device")
+                self.lbl_conn.setText("Connection: ❌ No Device Found")
                 self.lbl_serial.setText("Serial: -")
                 self.lbl_manufacturer.setText("Manufacturer: -")
                 self.lbl_model.setText("Model: -")
@@ -495,7 +495,7 @@ class GeloTechApp(QWidget):
 
             serial = devices[0]
             self.lbl_serial.setText(f"Serial: {serial}")
-            self.lbl_conn.setText("Connection: ✅ Device")
+            self.lbl_conn.setText("Connection: ✅ Device Found")
 
             # properties
             manufacturer = self._safe_getprop("ro.product.manufacturer") or "-"
